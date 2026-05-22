@@ -1,0 +1,1191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Megadriod NetRecon Lab - SOC Console</title>
+    
+    <!-- Google Fonts: Open Sans & Consolas fallback -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Leaflet Maps CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Chart.js & Leaflet JS -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    
+    <style>
+        /* SPLUNK-INSPIRED DARK THEME VARIABLES */
+        :root {
+            --bg-base: #0e0e0e;         /* Deepest background */
+            --bg-pane: #1a1a1c;         /* Slightly lighter pane background */
+            --bg-header: #141415;       /* Header background */
+            --border-color: #333333;    /* Subtle borders */
+            --brand-blue: #2196f3;      /* Neon blue accent */
+            --brand-green: #10b981;     /* Neon green success */
+            --text-main: #e0e0e0;       /* Primary text */
+            --text-muted: #888888;      /* Secondary text */
+            --highlight: #2c2c2e;       /* Hover state */
+        }
+
+        body { 
+            background-color: var(--bg-base); 
+            color: var(--text-main); 
+            font-family: 'Open Sans', sans-serif; 
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden; /* Prevent body scroll, handle inside panes */
+        }
+        
+        /* BRAND HEADER */
+        .brand-header {
+            background-color: var(--bg-header);
+            border-bottom: 2px solid var(--brand-blue);
+        }
+
+        /* DARK MODE PACKET COLORS */
+        .pkt-tcp { background-color: #1e1e1e; color: #d4d4d4; }
+        .pkt-http { background-color: #132b1c; color: #85d5a2; }
+        .pkt-dns { background-color: #13243b; color: #85b8eb; }
+        .pkt-smb { background-color: #3b2b10; color: #ebd185; }
+        .pkt-icmp { background-color: #2b132b; color: #d585d5; }
+        .pkt-critical { background-color: #4a1111 !important; color: #ff9999 !important; font-weight: bold; }
+        .pkt-high { background-color: #4a2b11 !important; color: #ffcc99 !important; }
+        
+        .pkt-row:hover { filter: brightness(1.3); cursor: pointer; }
+        .pkt-selected { background-color: #003366 !important; color: #ffffff !important; border-left: 3px solid var(--brand-blue); }
+
+        /* SCROLLBARS (Dark) */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: var(--bg-base); }
+        ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--brand-blue); }
+
+        /* FLEX LAYOUT & RESIZER */
+        .main-wrapper {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0; /* Critical for nested flex scrolling */
+        }
+        
+        .top-pane { 
+            height: 45%; 
+            display: flex; 
+            flex-direction: column; 
+            background-color: var(--bg-pane); 
+            min-height: 100px;
+        }
+        
+        .resizer-horizontal {
+            height: 6px;
+            background-color: var(--bg-base);
+            border-top: 1px solid var(--border-color);
+            border-bottom: 1px solid var(--border-color);
+            cursor: row-resize;
+            z-index: 10;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .resizer-horizontal::after {
+            content: "";
+            width: 40px;
+            height: 2px;
+            background-color: #666;
+            border-radius: 2px;
+        }
+        
+        .resizer-horizontal:hover, .resizer-horizontal:active { background-color: #2a2a2a; }
+
+        .bottom-pane { 
+            flex: 1; 
+            display: flex; 
+            background-color: var(--bg-pane); 
+            min-height: 0; /* Allow inner scrolling */
+        }
+        
+        @media (max-width: 768px) {
+            .bottom-pane { flex-direction: column; }
+            .details-pane, .investigation-pane { width: 100% !important; border-right: none !important; border-bottom: 2px solid var(--border-color); }
+        }
+        
+        /* INNER PANE SCROLLING */
+        .details-pane { 
+            width: 40%; 
+            border-right: 2px solid var(--bg-base); 
+            display: flex; 
+            flex-direction: column;
+            background-color: var(--bg-pane); 
+        }
+        
+        .investigation-pane { 
+            width: 60%; 
+            display: flex; 
+            flex-direction: column; 
+            background-color: #121213; 
+        }
+        
+        .scrollable-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px;
+        }
+
+        /* TABLE STYLES */
+        .table-container { flex: 1; overflow-y: auto; }
+        table { width: 100%; text-align: left; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
+        th { position: sticky; top: 0; background-color: #252526; color: #e0e0e0; z-index: 5; padding: 6px 10px; font-size: 0.85rem; border-right: 1px solid var(--border-color); border-bottom: 2px solid var(--border-color); font-weight: 700;}
+        td { padding: 4px 10px; font-size: 0.85rem; border-right: 1px solid #333; border-bottom: 1px solid #222; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'Consolas', 'Courier New', monospace;}
+        
+        /* TYPOGRAPHY & ELEMENTS */
+        .tree-line { border-left: 1px dotted #555; margin-left: 12px; padding-left: 12px; margin-top: 6px; }
+        
+        .btn { background-color: #005a9e; color: #ffffff; padding: 6px 14px; border-radius: 4px; font-size: 0.85rem; font-weight: 600; transition: background 0.2s; cursor: pointer; border: 1px solid #004578; }
+        .btn:hover { background-color: var(--brand-blue); }
+        .btn-danger { background-color: #8b0000; border-color: #660000; }
+        .btn-danger:hover { background-color: #cc0000; }
+        .btn-success { background-color: #006400; border-color: #004d00; }
+        .btn-success:hover { background-color: var(--brand-green); }
+        .btn-secondary { background-color: #333333; border-color: #444; }
+        .btn-secondary:hover { background-color: #4a4a4a; }
+        
+        .btn-tool { background-color: #252526; color: #cccccc; padding: 6px 8px; font-size: 0.75rem; border-radius: 4px; border: 1px solid var(--border-color); font-weight: 600; cursor: pointer; transition: all 0.2s; text-align: center; }
+        .btn-tool:hover { background-color: #004578; color: white; border-color: var(--brand-blue); }
+        
+        .input-dark { background-color: #1e1e1e; border: 1px solid var(--border-color); color: #e0e0e0; padding: 6px 10px; border-radius: 4px; font-size: 0.85rem; }
+        .input-dark:focus { outline: none; border-color: var(--brand-blue); box-shadow: 0 0 0 1px rgba(33, 150, 243, 0.5); }
+
+        /* TABS */
+        .tabs-header { display: flex; background: var(--bg-pane); border-bottom: 1px solid var(--border-color); }
+        .tab-btn { padding: 8px 16px; background: transparent; color: var(--text-muted); border-bottom: 2px solid transparent; font-weight: 600; font-size: 0.85rem; cursor: pointer; outline: none; }
+        .tab-btn:hover { color: var(--text-main); background: #252526; }
+        .tab-active { color: var(--brand-blue); border-bottom: 2px solid var(--brand-blue); background: #121213; }
+        
+        .tab-content { flex: 1; display: none; flex-direction: column; padding: 15px; overflow-y: auto; min-height: 0;}
+        .tab-content.active { display: flex; }
+
+        /* HEX DUMP */
+        .hex-dump { font-family: 'Consolas', 'Courier New', monospace; font-size: 0.75rem; color: #cccccc; white-space: pre; margin-top: 10px; background: #111111; padding: 10px; border: 1px solid var(--border-color); border-radius: 4px; overflow-x: auto;}
+        .hex-offset { color: #666; margin-right: 10px; }
+        .hex-ascii { color: #85b8eb; margin-left: 10px; }
+
+        /* MAP */
+        #map-container { width: 100%; height: 100%; min-height: 200px; border-radius: 4px; border: 1px solid var(--border-color); z-index: 1;}
+        
+        /* TERMINAL / RECON */
+        .recon-terminal { background: #000000; color: #00ff00; font-family: 'Consolas', monospace; font-size: 0.8rem; padding: 10px; border-radius: 4px; flex: 1; overflow-y: auto; white-space: pre-wrap; margin-top: 10px; border: 1px solid #333; }
+
+        /* INTERCEPTOR QUEUE */
+        .queue-item { padding: 8px; border-bottom: 1px solid var(--border-color); background: #1e1e1e; cursor: pointer; font-family: 'Consolas', monospace; font-size: 0.8rem; transition: background 0.2s;}
+        .queue-item:hover { background: #2a2a2c; }
+        .queue-item.active { background: #003366; border-left: 3px solid var(--brand-blue); }
+
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <!-- Brand Header -->
+    <div class="brand-header flex flex-wrap items-center justify-between p-2 px-4 gap-2">
+        <div class="flex items-center gap-4">
+            <img src="logo.png" alt="Megadriod Logo" title="Megadriod Cybersecurity Company" class="h-10 w-10 object-contain bg-white rounded p-1" onerror="this.style.display='none'">
+            <div>
+                <h1 class="text-lg font-bold tracking-wide text-white">MEGADRIOD CYBERSECURITY COMPANY</h1>
+                <p class="text-xs font-semibold text-blue-400 uppercase tracking-widest">Megadriod Innovation Labs - NetRecon DPI</p>
+            </div>
+        </div>
+        
+        <div class="flex flex-wrap items-center gap-3">
+            <button id="live-toggle" onclick="toggleLiveCapture()" class="btn btn-success" title="Toggle Live Interface Capture" aria-label="Toggle Live Capture">
+                [LIVE: ON]
+            </button>
+            <button onclick="openDashboard()" class="btn btn-secondary" title="View Statistical Dashboard" aria-label="Open Dashboard">
+                View Statistics
+            </button>
+            <button onclick="downloadPcapData()" class="btn" style="background-color: var(--bg-pane); border: 1px solid #555;" title="Export PCAP Data for offline analysis" aria-label="Download PCAP Data">
+                Export Capture ⬇
+            </button>
+        </div>
+    </div>
+
+    <!-- Filter & Action Bar -->
+    <div class="flex flex-wrap items-center gap-3 p-2 bg-[#1a1a1c] border-b border-[#333] text-sm">
+        <span class="font-bold text-gray-400">Display Filter:</span>
+        <input type="text" id="filter-ip" placeholder="IP Address" class="input-dark w-40" title="Filter by IP Address" aria-label="IP Address Filter">
+        <input type="text" id="filter-domain" placeholder="Keyword / Payload" class="input-dark w-40" title="Filter by Keyword or Payload" aria-label="Keyword Filter">
+        <select id="filter-protocol" class="input-dark" title="Select Protocol" aria-label="Protocol Filter">
+            <option value="ALL">All Protocols</option>
+            <option value="HTTP">HTTP</option>
+            <option value="HTTPS">HTTPS</option>
+            <option value="DNS">DNS</option>
+            <option value="SMB">SMB</option>
+            <option value="ICMP">ICMP</option>
+            <option value="TCP">TCP</option>
+            <option value="UDP">UDP</option>
+        </select>
+        <select id="filter-severity" class="input-dark" title="Select Severity Level" aria-label="Severity Filter">
+            <option value="ALL">All Severities</option>
+            <option value="Medium">Medium & Above</option>
+            <option value="High">High & Above</option>
+            <option value="Critical">Critical Only</option>
+        </select>
+        <button onclick="fetchPackets()" class="btn" title="Apply Filters" aria-label="Apply Filters">Apply</button>
+        <button onclick="clearFilters()" class="btn btn-secondary" title="Clear Filters" aria-label="Clear Filters">Clear</button>
+        
+        <div class="ml-auto border-l border-gray-600 pl-3 flex items-center gap-2">
+            <span class="text-gray-400 font-semibold">Offline Analysis:</span>
+            <input type="file" id="pcap-upload" class="hidden" accept=".pcap,.pcapng,.json" onchange="uploadPcap()" title="Upload PCAP File" aria-label="Upload PCAP File">
+            <button onclick="document.getElementById('pcap-upload').click()" class="btn btn-secondary" title="Upload PCAP or JSON File" aria-label="Upload File">Import PCAP</button>
+        </div>
+    </div>
+
+    <div class="main-wrapper">
+        <!-- Packet List (Top Pane) -->
+        <div class="top-pane" id="top-pane">
+            <div class="table-container" id="packet-list-container">
+                <table>
+                    <colgroup>
+                        <col style="width: 8%;">
+                        <col style="width: 10%;">
+                        <col style="width: 12%;">
+                        <col style="width: 12%;">
+                        <col style="width: 8%;">
+                        <col style="width: 8%;">
+                        <col style="width: 42%;">
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <th title="Packet Number">No.</th>
+                            <th title="Relative Time">Time</th>
+                            <th title="Source IP Address">Source</th>
+                            <th title="Destination IP Address">Destination</th>
+                            <th title="Network Protocol">Protocol</th>
+                            <th title="Packet Length (Bytes)">Length</th>
+                            <th title="Packet Information">Info</th>
+                        </tr>
+                    </thead>
+                    <tbody id="packet-tbody">
+                        <!-- Rows populated by JS -->
+                    </tbody>
+                </table>
+            </div>
+            <div class="p-1 px-3 bg-[#111] border-t border-[#333] text-xs text-gray-400 flex justify-between">
+                <span id="packet-count">0 packets displayed</span>
+                <span id="system-status-text">System Active</span>
+            </div>
+        </div>
+
+        <!-- Draggable Resizer -->
+        <div class="resizer-horizontal" id="resizer" title="Drag to resize panes"></div>
+
+        <!-- Details & Investigation (Bottom Pane) -->
+        <div class="bottom-pane flex-1">
+            
+            <!-- Packet Details Tree (Left) -->
+            <div class="details-pane">
+                <div class="flex justify-between items-center mb-2 border-b border-[#333] pb-2 p-2">
+                    <h2 class="text-sm font-bold text-gray-200">Packet Inspection</h2>
+                    <button id="btn-follow-stream" onclick="followTcpStream()" class="btn btn-secondary hidden" style="padding: 2px 8px; font-size: 0.75rem;" title="Filter by this TCP Stream" aria-label="Follow TCP Stream">Follow Stream</button>
+                </div>
+                <div class="scrollable-content" id="packet-details-content">
+                    <p class="italic mt-4 text-center text-gray-500">Select a packet from the frame list to view structural breakdown and hex dump.</p>
+                </div>
+            </div>
+
+            <!-- Investigation Console (Right) -->
+            <div class="investigation-pane">
+                <div class="tabs-header">
+                    <button onclick="switchTab('geomap')" id="tab-geomap" class="tab-btn tab-active" title="View IP Geolocation Map">Geo-Map</button>
+                    <button onclick="switchTab('recon')" id="tab-recon" class="tab-btn" title="Network Reconnaissance Tools">OSINT</button>
+                    <button onclick="switchTab('interceptor')" id="tab-interceptor" class="tab-btn" title="Web Request Interceptor Proxy">Interceptor</button>
+                    <button onclick="switchTab('notes')" id="tab-notes" class="tab-btn" title="Analyst Investigation Notes">Notes</button>
+                    <button onclick="switchTab('escalate')" id="tab-escalate" class="tab-btn" title="Escalate Security Incident">Escalate</button>
+                </div>
+
+                <!-- GeoMap Tab -->
+                <div id="pane-geomap" class="tab-content active">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="font-bold text-sm text-gray-300" id="map-target-label">Target: Select a packet to map destination IP.</span>
+                    </div>
+                    <div id="map-container"></div>
+                </div>
+
+                <!-- Recon Tools Tab -->
+                <div id="pane-recon" class="tab-content">
+                    <div class="flex gap-2 mb-3 border-b border-[#333] pb-3">
+                        <input type="text" id="recon-target" placeholder="Target IP or Domain (Auto-filled on packet select)" class="input-dark flex-1" title="Recon Target">
+                        <button onclick="document.getElementById('recon-output').innerHTML = 'Megadriod Recon Engine v2.0 Ready...\\nSelect a tool below to begin active reconnaissance on the target.';" class="btn btn-secondary" title="Clear Terminal">Clear</button>
+                    </div>
+                    
+                    <div class="grid grid-cols-3 sm:grid-cols-5 gap-2 mb-2">
+                        <button onclick="runRecon('ping')" class="btn-tool">Ping</button>
+                        <button onclick="runRecon('traceroute')" class="btn-tool">Traceroute</button>
+                        <button onclick="runRecon('whois')" class="btn-tool">WHOIS / RDAP</button>
+                        <button onclick="runRecon('dns-a')" class="btn-tool">DNS A Record</button>
+                        <button onclick="runRecon('dns-mx')" class="btn-tool">DNS MX</button>
+                        <button onclick="runRecon('dns-txt')" class="btn-tool">DNS TXT</button>
+                        <button onclick="runRecon('reverse-dns')" class="btn-tool">Reverse DNS</button>
+                        <button onclick="runRecon('geoip')" class="btn-tool">GeoIP Info</button>
+                        <button onclick="runRecon('asn')" class="btn-tool">ASN Lookup</button>
+                        <button onclick="runRecon('port-scan')" class="btn-tool">Port Scan</button>
+                        <button onclick="runRecon('subnet-calc')" class="btn-tool">Subnet Calc</button>
+                        <button onclick="runRecon('http-headers')" class="btn-tool">HTTP Headers</button>
+                        <button onclick="runRecon('mac-lookup')" class="btn-tool">MAC Vendor</button>
+                        <button onclick="runRecon('threat-intel')" class="btn-tool">Threat Intel</button>
+                        <button onclick="runRecon('ssl-cert')" class="btn-tool">SSL Cert</button>
+                    </div>
+
+                    <div id="recon-output" class="recon-terminal">Megadriod Recon Engine v2.0 Ready...
+Select a tool above to begin active reconnaissance on the target.</div>
+                </div>
+
+                <!-- Web Interceptor Tab -->
+                <div id="pane-interceptor" class="tab-content">
+                    <div class="flex justify-between items-center mb-3 border-b border-[#333] pb-2">
+                        <h3 class="font-bold text-sm text-gray-300">Proxy Interception Queue (Port 8080)</h3>
+                        <button id="btn-toggle-proxy" onclick="toggleProxy()" class="btn btn-success" style="padding: 4px 8px; font-size: 0.75rem;">Interceptor: ON</button>
+                    </div>
+                    
+                    <div class="flex flex-col h-full gap-3 min-h-0">
+                        <!-- Queue List -->
+                        <div class="h-1/3 border border-[#333] rounded overflow-y-auto bg-[#111]" id="interceptor-queue-list">
+                            <div class="p-2 text-gray-500 text-xs text-center italic mt-4">Queue empty. Waiting for browser traffic on port 8080...</div>
+                        </div>
+                        
+                        <!-- Raw Editor -->
+                        <div class="flex-1 flex flex-col min-h-0">
+                            <span class="text-xs text-gray-400 font-bold mb-1">Raw Request Payload Editor:</span>
+                            <textarea id="interceptor-editor" class="input-dark flex-1 font-mono text-xs p-2 resize-none mb-2" placeholder="Select a request from the queue to inspect and modify its raw payload..."></textarea>
+                            <div class="flex gap-2">
+                                <button onclick="handleInterceptorAction('forward')" class="btn flex-1 bg-green-700 border-green-600 hover:bg-green-600">Forward Original</button>
+                                <button onclick="handleInterceptorAction('modify')" class="btn btn-secondary flex-1 border-blue-600 text-blue-400 hover:bg-blue-900 hover:text-white">Modify & Forward</button>
+                                <button onclick="handleInterceptorAction('drop')" class="btn btn-danger flex-1">Drop Packet</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Notes Tab -->
+                <div id="pane-notes" class="tab-content">
+                    <div id="notes-list" class="flex-1 overflow-y-auto mb-2 text-sm space-y-2 pr-2"></div>
+                    <div class="flex gap-2 mt-auto pt-3 border-t border-[#333]">
+                        <input type="text" id="note-input" placeholder="Tag evidence or add investigation notes here..." class="input-dark flex-1">
+                        <button onclick="addNote()" class="btn">Save Note</button>
+                    </div>
+                </div>
+
+                <!-- Escalate Tab -->
+                <div id="pane-escalate" class="tab-content">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                        <input type="text" id="esc-id" placeholder="Incident Title (e.g., Suspicious DNS Traffic)" class="input-dark sm:col-span-2">
+                        <select id="esc-severity" class="input-dark">
+                            <option value="High">Severity: High</option>
+                            <option value="Critical">Severity: Critical</option>
+                        </select>
+                        <select id="esc-role" class="input-dark">
+                            <option value="Tier_2_Analyst">Assign to Tier 2 Analyst</option>
+                            <option value="Incident_Response">Assign to Incident Response Team</option>
+                        </select>
+                    </div>
+                    <textarea id="esc-details" placeholder="Provide investigation summary and indicators of compromise (IOCs)..." class="input-dark flex-1 mb-3 resize-none"></textarea>
+                    <button onclick="escalateIncident()" class="btn btn-danger w-full mt-auto">Trigger Incident Escalation Workflow</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Dashboard Modal (Hidden by default) -->
+    <div id="dashboard-modal" class="fixed inset-0 bg-black bg-opacity-70 hidden z-50 flex items-center justify-center p-4">
+        <div class="bg-[#1a1a1c] border-t-4 border-blue-600 rounded-lg w-full max-w-5xl max-h-full flex flex-col shadow-2xl">
+            <div class="flex justify-between items-center p-4 border-b border-[#333] bg-[#111]">
+                <h2 class="text-xl font-bold text-gray-200">Megadriod Protocol Statistics Dashboard</h2>
+                <button onclick="closeDashboard()" class="text-gray-500 hover:text-red-500 font-bold text-xl px-2">X</button>
+            </div>
+            <div class="p-4 flex-1 overflow-y-auto">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                    <div class="bg-[#1e1e1e] p-4 rounded border border-[#333] flex flex-col items-center">
+                        <h3 class="font-bold text-center mb-4 w-full text-gray-400 uppercase tracking-wide text-xs">Protocol Distribution</h3>
+                        <div class="relative w-full max-w-[250px] aspect-square">
+                            <canvas id="protoChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="bg-[#1e1e1e] p-4 rounded border border-[#333]">
+                        <h3 class="font-bold text-center mb-4 text-gray-400 uppercase tracking-wide text-xs">Security Metrics & Intelligence</h3>
+                        <div id="dash-metrics" class="space-y-4 text-sm text-gray-300"></div>
+                    </div>
+                </div>
+                <div class="bg-[#1e1e1e] p-4 rounded border border-[#333]">
+                    <h3 class="font-bold text-center mb-4 text-gray-400 uppercase tracking-wide text-xs">Connection Frequency (Packets over Time)</h3>
+                    <div class="relative w-full h-[250px]">
+                        <canvas id="freqChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification System -->
+    <div id="toast-container" class="fixed bottom-4 right-4 z-50 space-y-2 pointer-events-none"></div>
+
+    <script>
+        // GLOBALS
+        let currentPackets = [];
+        let selectedPacket = null;
+        let liveInterval = null;
+        let isLive = true;
+        let chartInstance = null;
+        let freqChartInstance = null;
+        let leafletMap = null;
+        let currentMarker = null;
+        const ipGeoCache = {}; 
+        
+        // Interceptor Globals
+        let proxyActive = true;
+        let interceptQueue = [];
+        let selectedInterceptReqId = null;
+
+        const isSandbox = window.location.protocol === 'blob:' || window.location.protocol === 'file:';
+        const API_BASE = isSandbox ? 'http://127.0.0.1:8000' : '';
+
+        // INITIALIZATION
+        window.onload = () => {
+            initMap();
+            fetchPackets();
+            fetchNotes();
+            startLiveCapture();
+            initResizer();
+            
+            // Poll interceptor queue every 2 seconds
+            setInterval(fetchInterceptorQueue, 2000);
+        };
+
+        // --- DRAGGABLE RESIZER LOGIC ---
+        function initResizer() {
+            const resizer = document.getElementById('resizer');
+            const topPane = document.getElementById('top-pane');
+            let isResizing = false;
+
+            resizer.addEventListener('mousedown', (e) => {
+                isResizing = true;
+                document.body.style.cursor = 'row-resize';
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isResizing) return;
+                // Calculate height based on mouse position relative to container
+                const containerOffsetTop = document.querySelector('.main-wrapper').offsetTop;
+                const newHeight = e.clientY - containerOffsetTop;
+                
+                // Set constraints
+                if (newHeight > 100 && newHeight < window.innerHeight - 200) {
+                    topPane.style.height = newHeight + 'px';
+                    topPane.style.flex = 'none'; // override flex basis
+                }
+            });
+
+            document.addEventListener('mouseup', () => {
+                if (isResizing) {
+                    isResizing = false;
+                    document.body.style.cursor = 'default';
+                }
+            });
+        }
+
+        // --- CORE LAB FUNCTIONS ---
+        function startLiveCapture() {
+            liveInterval = setInterval(fetchPackets, 3000);
+            const btn = document.getElementById('live-toggle');
+            btn.innerText = '[LIVE: ON]';
+            btn.className = 'btn btn-success';
+            isLive = true;
+        }
+
+        function toggleLiveCapture() {
+            const btn = document.getElementById('live-toggle');
+            if (isLive) {
+                clearInterval(liveInterval);
+                btn.innerText = '[LIVE: OFF]';
+                btn.className = 'btn btn-danger';
+                isLive = false;
+            } else {
+                startLiveCapture();
+            }
+        }
+
+        function showToast(message, type="info") {
+            const toast = document.createElement('div');
+            toast.className = `px-4 py-3 rounded shadow-lg text-white text-sm font-bold transform transition-all duration-300 translate-x-full ${type === 'error' ? 'bg-red-900 border border-red-500' : 'bg-[#003366] border border-[#005a9e]'}`;
+            toast.innerText = `${type === 'error' ? 'ERROR: ' : 'INFO: '} ${message}`;
+            const container = document.getElementById('toast-container');
+            container.appendChild(toast);
+            
+            setTimeout(() => toast.classList.remove('translate-x-full'), 10);
+            setTimeout(() => {
+                toast.classList.add('translate-x-full');
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+
+        // --- PACKET FETCHING & RENDERING ---
+        async function fetchPackets() {
+            const proto = document.getElementById('filter-protocol').value;
+            const ip = document.getElementById('filter-ip').value;
+            const domain = document.getElementById('filter-domain').value;
+            const severity = document.getElementById('filter-severity').value;
+
+            let url = `${API_BASE}/api/packets?protocol=${proto}&min_severity=${severity}`;
+            if(ip) url += `&ip_filter=${encodeURIComponent(ip)}`;
+            if(domain) url += `&domain_filter=${encodeURIComponent(domain)}`;
+
+            try {
+                const res = await fetch(url);
+                if (!res.ok) throw new Error("Network response error");
+                const data = await res.json();
+                
+                if (currentPackets.length !== data.length || !isLive) {
+                    currentPackets = data;
+                    renderPacketTable(data);
+                    document.getElementById('packet-count').innerText = `${data.length} packets displayed`;
+                }
+                
+                // Update system status if backend provides it in stats
+                fetch(`${API_BASE}/api/dashboard/stats`).then(r => r.json()).then(stats => {
+                    if(stats.capture_engine_status) document.getElementById('system-status-text').innerText = stats.capture_engine_status;
+                }).catch(()=>{});
+
+            } catch (err) {
+                console.error("Failed to fetch packets", err);
+                if (isSandbox) {
+                    showToast("Preview Mode: Please run FastAPI locally at 127.0.0.1:8000", "error");
+                    if(isLive) toggleLiveCapture();
+                }
+            }
+        }
+
+        function clearFilters() {
+            document.getElementById('filter-protocol').value = 'ALL';
+            document.getElementById('filter-ip').value = '';
+            document.getElementById('filter-domain').value = '';
+            document.getElementById('filter-severity').value = 'ALL';
+            fetchPackets();
+        }
+
+        function getRowClass(packet) {
+            if (packet.severity === 'Critical') return 'pkt-critical';
+            if (packet.severity === 'High') return 'pkt-high';
+            
+            const p = packet.protocol.toUpperCase();
+            if (p === 'TCP') return 'pkt-tcp';
+            if (p === 'HTTP' || p === 'HTTPS') return 'pkt-http';
+            if (p === 'DNS' || p === 'UDP') return 'pkt-dns';
+            if (p === 'SMB') return 'pkt-smb';
+            if (p === 'ICMP') return 'pkt-icmp';
+            return '';
+        }
+
+        function renderPacketTable(packets) {
+            const tbody = document.getElementById('packet-tbody');
+            tbody.innerHTML = '';
+            
+            packets.forEach(p => {
+                const tr = document.createElement('tr');
+                tr.className = `pkt-row ${getRowClass(p)}`;
+                if (selectedPacket && selectedPacket.id === p.id) {
+                    tr.classList.add('pkt-selected');
+                }
+                tr.onclick = () => selectPacket(p.id, tr);
+                
+                const infoPrefix = p.alerts.length > 0 ? '⚠ ' : '';
+
+                tr.innerHTML = `
+                    <td>${p.id}</td>
+                    <td>${p.time_relative}</td>
+                    <td>${p.src_ip}</td>
+                    <td>${p.dst_ip}</td>
+                    <td>${p.protocol}</td>
+                    <td>${p.length}</td>
+                    <td title="${p.info.replace(/"/g, '&quot;')}"><strong>${infoPrefix}</strong>${p.info}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function selectPacket(id, rowElement) {
+            document.querySelectorAll('.pkt-row').forEach(r => r.classList.remove('pkt-selected'));
+            rowElement.classList.add('pkt-selected');
+            
+            selectedPacket = currentPackets.find(p => p.id === id);
+            
+            if (selectedPacket.direction === "Internal-to-External") {
+                 document.getElementById('recon-target').value = selectedPacket.dst_ip;
+            } else {
+                 document.getElementById('recon-target').value = selectedPacket.src_ip;
+            }
+           
+            renderPacketDetails();
+            mapIpLocation(selectedPacket.dst_ip);
+        }
+
+        function followTcpStream() {
+            if (!selectedPacket) return;
+            document.getElementById('filter-ip').value = selectedPacket.src_ip;
+            document.getElementById('filter-protocol').value = selectedPacket.protocol === 'HTTP' || selectedPacket.protocol === 'HTTPS' ? 'ALL' : selectedPacket.protocol;
+            fetchPackets();
+            showToast(`Following stream for ${selectedPacket.src_ip}`);
+        }
+
+        function generateMockHexDump(length, info) {
+            let hexStr = "";
+            const charSet = "0123456789abcdef";
+            const safeChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.?!-/() ";
+            
+            for(let i=0; i<Math.min(length, 256); i+=16) {
+                let offset = i.toString(16).padStart(4, '0');
+                let hexBytes = "";
+                let asciiStr = "";
+                
+                for(let j=0; j<16; j++) {
+                    if (i+j < length) {
+                        let charCode = 46;
+                        if (i+j < info.length) charCode = info.charCodeAt(i+j);
+                        else charCode = Math.floor(Math.random() * 255);
+
+                        let hex1 = charSet[Math.floor(charCode / 16) % 16];
+                        let hex2 = charSet[charCode % 16];
+                        
+                        hexBytes += hex1 + hex2 + " ";
+                        
+                        let char = String.fromCharCode(charCode);
+                        asciiStr += safeChars.includes(char) ? char : '.';
+                    } else {
+                        hexBytes += "   ";
+                        asciiStr += " ";
+                    }
+                    if (j === 7) hexBytes += " ";
+                }
+                hexStr += `<span class="hex-offset">${offset}</span>${hexBytes}<span class="hex-ascii">${asciiStr.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>\n`;
+            }
+            return hexStr;
+        }
+
+        function renderPacketDetails() {
+            const div = document.getElementById('packet-details-content');
+            const streamBtn = document.getElementById('btn-follow-stream');
+            
+            if (!selectedPacket) {
+                streamBtn.classList.add('hidden');
+                return;
+            }
+            const p = selectedPacket;
+            
+            if (p.protocol === 'TCP' || p.protocol === 'HTTP' || p.protocol === 'HTTPS') {
+                streamBtn.classList.remove('hidden');
+            } else {
+                streamBtn.classList.add('hidden');
+            }
+
+            let alertsHtml = '';
+            if (p.alerts && p.alerts.length > 0) {
+                alertsHtml = `<div class="text-[#ff9999] mt-3 font-bold">Intrusion Detection Engine Alerts:</div>`;
+                p.alerts.forEach(a => {
+                    alertsHtml += `<div class="tree-line font-bold text-red-400">-> ${a}</div>`;
+                });
+            }
+
+            div.innerHTML = `
+                <div class="font-bold text-brand-blue mb-2 border-b border-[#333] pb-1">Frame ${p.id}: ${p.length} bytes on wire</div>
+                
+                <div class="font-bold text-gray-300 mt-2">Internet Protocol Version 4, Src: ${p.src_ip}, Dst: ${p.dst_ip}</div>
+                <div class="tree-line text-gray-400">Header Length: 20 bytes</div>
+                <div class="tree-line text-gray-400">Differentiated Services Field: 0x00 (DSCP: CS0)</div>
+                <div class="tree-line text-gray-400">Time to Live: 64</div>
+                <div class="tree-line text-gray-400">Traffic Mapping: <span class="font-bold text-blue-400">${p.direction}</span></div>
+
+                <div class="font-bold text-gray-300 mt-3">Transport / Application Protocol: ${p.protocol}</div>
+                <div class="tree-line text-gray-400">Source Port: ${p.src_port}</div>
+                <div class="tree-line text-gray-400">Destination Port: ${p.dst_port}</div>
+                <div class="tree-line text-gray-400">Payload Information: <span class="text-green-400">${p.info}</span></div>
+                
+                <div class="font-bold text-gray-300 mt-3">Megadriod DPI Threat Intelligence Engine</div>
+                <div class="tree-line text-gray-400">Severity Classification: <span class="font-bold ${p.severity === 'Critical' ? 'text-red-500' : (p.severity === 'High' ? 'text-orange-400' : 'text-green-400')}">${p.severity}</span></div>
+                <div class="tree-line text-gray-400">Heuristic Anomaly Score: ${p.anomaly_score}/100</div>
+                ${alertsHtml}
+                
+                <div class="font-bold text-gray-300 mt-4 border-b border-[#333] pb-1">Data (Hex Dump)</div>
+                <div class="hex-dump">${generateMockHexDump(p.length, p.info)}</div>
+            `;
+        }
+
+        // --- GEOLOCATION MAP (Leaflet) ---
+        function initMap() {
+            leafletMap = L.map('map-container').setView([20, 0], 2);
+            // Use a dark-themed map tile layer if possible, else standard OSM
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                attribution: '© OpenStreetMap contributors, © CARTO',
+                maxZoom: 18
+            }).addTo(leafletMap);
+        }
+
+        async function mapIpLocation(ip) {
+            const label = document.getElementById('map-target-label');
+            label.innerText = `Resolving IP Location: ${ip}...`;
+            
+            if (ip.startsWith('10.') || ip.startsWith('192.168.') || ip.startsWith('127.')) {
+                label.innerText = `Target IP: ${ip} (Internal Corporate Network)`;
+                if(currentMarker) leafletMap.removeLayer(currentMarker);
+                leafletMap.setView([38.8977, -77.0365], 4); 
+                currentMarker = L.marker([38.8977, -77.0365]).addTo(leafletMap).bindPopup("<b style='color:#000'>Internal Network</b><br>Datacenter / LAN").openPopup();
+                return;
+            }
+
+            try {
+                let data;
+                if (ipGeoCache[ip]) {
+                    data = ipGeoCache[ip];
+                } else {
+                    const res = await fetch(`https://ipapi.co/${ip}/json/`);
+                    data = await res.json();
+                    if(data.error) throw new Error("API Limit");
+                    ipGeoCache[ip] = data; 
+                }
+
+                label.innerText = `Target IP: ${ip} | Location: ${data.city}, ${data.country_name} | ISP: ${data.org}`;
+                
+                if(currentMarker) leafletMap.removeLayer(currentMarker);
+                leafletMap.setView([data.latitude, data.longitude], 6);
+                currentMarker = L.marker([data.latitude, data.longitude]).addTo(leafletMap)
+                    .bindPopup(`<b style='color:#000'>${ip}</b><br><span style='color:#333'>${data.city}, ${data.country_name}</span>`).openPopup();
+                
+            } catch(e) {
+                label.innerText = `Target IP: ${ip} (Geolocation lookup failed or rate limited)`;
+            }
+        }
+
+        // --- RECON TOOLS (REAL BACKEND OSINT) ---
+        async function runRecon(type) {
+            const target = document.getElementById('recon-target').value.trim();
+            const term = document.getElementById('recon-output');
+            
+            if(!target) {
+                term.innerText = "Error: Please specify a target IP or Domain.";
+                return;
+            }
+
+            term.innerText = `[Megadriod Recon Engine] Executing [${type.toUpperCase()}] natively on target: ${target}...\n`;
+            term.innerText += `----------------------------------------------------------\n`;
+            
+            try {
+                const formData = new FormData();
+                formData.append("target", target);
+                
+                const res = await fetch(`${API_BASE}/api/recon/${type}`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!res.ok) throw new Error("Backend connection failed.");
+                
+                const data = await res.json();
+                term.innerText += data.result + '\n';
+                term.scrollTop = term.scrollHeight;
+
+            } catch (err) {
+                term.innerText += `\n[ERROR] Network error communicating with Python backend: ${err.message}\n`;
+            }
+        }
+
+        // --- NEW: WEB INTERCEPTOR PROXY LOGIC ---
+        async function toggleProxy() {
+            proxyActive = !proxyActive;
+            const btn = document.getElementById('btn-toggle-proxy');
+            
+            try {
+                const formData = new FormData();
+                formData.append("active", proxyActive);
+                await fetch(`${API_BASE}/api/interceptor/toggle`, { method: 'POST', body: formData });
+                
+                if(proxyActive) {
+                    btn.innerText = 'Interceptor: ON';
+                    btn.className = 'btn btn-success';
+                    showToast("Proxy interception enabled. Waiting for browser traffic.");
+                } else {
+                    btn.innerText = 'Interceptor: OFF';
+                    btn.className = 'btn btn-danger';
+                    showToast("Proxy interception disabled. Traffic will pass through.");
+                }
+            } catch(e) {
+                showToast("Failed to toggle interceptor.", "error");
+            }
+        }
+
+        async function fetchInterceptorQueue() {
+            if (!proxyActive) return;
+            try {
+                const res = await fetch(`${API_BASE}/api/interceptor/queue`);
+                if (!res.ok) return;
+                const newQueue = await res.json();
+                
+                // Fast naive check if queue changed
+                if(JSON.stringify(newQueue.map(q=>q.id)) !== JSON.stringify(interceptQueue.map(q=>q.id))) {
+                    interceptQueue = newQueue;
+                    renderInterceptQueue();
+                }
+            } catch (e) {}
+        }
+
+        function renderInterceptQueue() {
+            const listDiv = document.getElementById('interceptor-queue-list');
+            if (interceptQueue.length === 0) {
+                listDiv.innerHTML = `<div class="p-2 text-gray-500 text-xs text-center italic mt-4">Queue empty. Waiting for browser traffic on port 8080...</div>`;
+                // Clear editor if nothing selected
+                if(!selectedInterceptReqId) {
+                    document.getElementById('interceptor-editor').value = '';
+                }
+                return;
+            }
+            
+            listDiv.innerHTML = '';
+            interceptQueue.forEach(req => {
+                const div = document.createElement('div');
+                div.className = `queue-item ${selectedInterceptReqId === req.id ? 'active' : 'text-green-400'}`;
+                div.innerText = `[${req.request.method}] ${req.request.url.substring(0, 60)}...`;
+                div.onclick = () => selectInterceptRequest(req.id);
+                listDiv.appendChild(div);
+            });
+        }
+
+        function selectInterceptRequest(id) {
+            selectedInterceptReqId = id;
+            renderInterceptQueue(); // update active class
+            
+            const reqData = interceptQueue.find(q => q.id === id);
+            if(!reqData) return;
+
+            const r = reqData.request;
+            let rawStr = `${r.method} ${r.url} HTTP/1.1\n`;
+            for(let k in r.headers) {
+                rawStr += `${k}: ${r.headers[k]}\n`;
+            }
+            rawStr += `\n${r.body || ''}`;
+            
+            document.getElementById('interceptor-editor').value = rawStr;
+        }
+
+        async function handleInterceptorAction(action) {
+            if(!selectedInterceptReqId) {
+                showToast("Please select a request from the queue first.", "error");
+                return;
+            }
+
+            let payload = { action: action };
+
+            if(action === 'modify') {
+                const rawText = document.getElementById('interceptor-editor').value;
+                const lines = rawText.split('\n');
+                
+                if(lines.length < 1) return;
+                
+                // Parse Request Line
+                const reqLine = lines[0].split(' ');
+                if(reqLine.length >= 2) {
+                    payload.modified_url = reqLine[1];
+                }
+
+                // Parse Headers and Body
+                let headers = {};
+                let body = "";
+                let inBody = false;
+                
+                for(let i=1; i<lines.length; i++) {
+                    if(!inBody && lines[i].trim() === '') {
+                        inBody = true;
+                        continue;
+                    }
+                    if(!inBody) {
+                        const colonIdx = lines[i].indexOf(':');
+                        if(colonIdx > 0) {
+                            headers[lines[i].substring(0, colonIdx).trim()] = lines[i].substring(colonIdx+1).trim();
+                        }
+                    } else {
+                        body += lines[i] + '\n';
+                    }
+                }
+                
+                payload.modified_headers = headers;
+                payload.modified_body = body.trim();
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/api/interceptor/action/${selectedInterceptReqId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                if(res.ok) {
+                    showToast(`Request successfully ${action}ed.`);
+                    selectedInterceptReqId = null;
+                    document.getElementById('interceptor-editor').value = '';
+                    fetchInterceptorQueue(); // Force instant refresh
+                } else {
+                    showToast("Failed to process action. Request may have timed out.", "error");
+                }
+            } catch(e) {
+                showToast("Connection error to proxy engine.", "error");
+            }
+        }
+
+
+        // --- EXPORT PCAP (JSON Blob) ---
+        function downloadPcapData() {
+            if (currentPackets.length === 0) {
+                showToast("No packets available to export.", "error");
+                return;
+            }
+            
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(currentPackets, null, 2));
+            const downloadAnchorNode = document.createElement('a');
+            downloadAnchorNode.setAttribute("href", dataStr);
+            downloadAnchorNode.setAttribute("download", `megadriod_capture_${new Date().getTime()}.json`);
+            document.body.appendChild(downloadAnchorNode);
+            downloadAnchorNode.click();
+            downloadAnchorNode.remove();
+            
+            showToast("Capture data exported successfully.");
+        }
+
+        // --- PCAP UPLOAD ---
+        async function uploadPcap() {
+            const fileInput = document.getElementById('pcap-upload');
+            if (fileInput.files.length === 0) return;
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            try {
+                const res = await fetch(`${API_BASE}/api/traffic/upload-pcap`, { method: 'POST', body: formData });
+                if(!res.ok) throw new Error(await res.text());
+                const data = await res.json();
+                showToast(`Successfully parsed Capture File: ${data.filename}`);
+                fetchPackets();
+            } catch (err) {
+                showToast("Upload failed or backend engine not reachable.", "error");
+            }
+            fileInput.value = ''; 
+        }
+
+        // --- TAB MANAGEMENT ---
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('tab-active'));
+            
+            document.getElementById(`pane-${tab}`).classList.add('active');
+            document.getElementById(`tab-${tab}`).classList.add('tab-active');
+
+            if (tab === 'geomap' && leafletMap) {
+                setTimeout(() => leafletMap.invalidateSize(), 100);
+            }
+        }
+
+        // --- INCIDENT & NOTES API ---
+        async function fetchNotes() {
+            try {
+                const res = await fetch(`${API_BASE}/api/investigation/notes`);
+                if(!res.ok) return;
+                const data = await res.json();
+                const list = document.getElementById('notes-list');
+                list.innerHTML = '';
+                data.forEach(n => {
+                    list.innerHTML += `
+                        <div class="bg-[#1e1e1e] p-3 rounded border border-[#333]">
+                            <div class="flex justify-between text-xs text-gray-500 mb-2 border-b border-[#333] pb-1">
+                                <strong>Analyst: ${n.analyst}</strong>
+                                <span>${n.timestamp}</span>
+                            </div>
+                            <div class="text-gray-300">${n.text} <span class="text-brand-blue text-xs ml-2 font-bold">[Ref: Pkt ${n.packet_id}]</span></div>
+                        </div>
+                    `;
+                });
+                list.scrollTop = list.scrollHeight;
+            } catch (err) {}
+        }
+
+        async function addNote() {
+            const text = document.getElementById('note-input').value;
+            if (!text) return;
+            const pktId = selectedPacket ? selectedPacket.id : "GLOBAL";
+
+            try {
+                const res = await fetch(`${API_BASE}/api/investigation/notes`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ packet_id: pktId, text: text })
+                });
+                if(!res.ok) throw new Error("Failed");
+                document.getElementById('note-input').value = '';
+                fetchNotes();
+                showToast("Evidence note saved.");
+            } catch (err) {
+                showToast("Failed to save note.", "error");
+            }
+        }
+
+        async function escalateIncident() {
+            const title = document.getElementById('esc-id').value;
+            const severity = document.getElementById('esc-severity').value;
+            const role = document.getElementById('esc-role').value;
+            const details = document.getElementById('esc-details').value;
+
+            if(!title || !details) {
+                showToast("Title and Details are required.", "error");
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/api/investigation/escalate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ incident_id: title, severity: severity, assigned_role: role, details: details })
+                });
+                if(!res.ok) throw new Error("Failed");
+                document.getElementById('esc-id').value = '';
+                document.getElementById('esc-details').value = '';
+                showToast("Incident successfully escalated.");
+            } catch (err) {
+                showToast("Failed to escalate incident.", "error");
+            }
+        }
+
+        // --- DASHBOARD ---
+        async function openDashboard() {
+            document.getElementById('dashboard-modal').classList.remove('hidden');
+            try {
+                const res = await fetch(`${API_BASE}/api/dashboard/stats`);
+                if(!res.ok) throw new Error("Failed");
+                const data = await res.json();
+                
+                const mDiv = document.getElementById('dash-metrics');
+                const lowPct = data.total_packets ? (data.severity_distribution.Low / data.total_packets) * 100 : 0;
+                const medPct = data.total_packets ? (data.severity_distribution.Medium / data.total_packets) * 100 : 0;
+                const highPct = data.total_packets ? (data.severity_distribution.High / data.total_packets) * 100 : 0;
+                const critPct = data.total_packets ? (data.severity_distribution.Critical / data.total_packets) * 100 : 0;
+
+                mDiv.innerHTML = `
+                    <div class="flex justify-between border-b border-[#333] pb-2">
+                        <span class="text-gray-400 font-bold">Total Packets Evaluated:</span>
+                        <span class="font-bold text-brand-blue">${data.total_packets}</span>
+                    </div>
+                    <div class="flex justify-between border-b border-[#333] pb-2 mt-2">
+                        <span class="text-gray-400 font-bold">Network Anomaly Score:</span>
+                        <span class="font-bold ${data.average_anomaly_score > 50 ? 'text-red-500' : 'text-green-500'}">${data.average_anomaly_score}/100</span>
+                    </div>
+                    <div class="flex justify-between border-b border-[#333] pb-2 mt-2">
+                        <span class="text-gray-400 font-bold">Active Threats / Alerts:</span>
+                        <span class="font-bold text-red-500">⚠ ${data.active_alerts_count}</span>
+                    </div>
+                    <div class="mt-4">
+                        <span class="text-gray-400 font-bold block mb-2">Severity Distribution:</span>
+                        <div class="w-full bg-[#111] rounded-full h-4 mb-1 overflow-hidden flex border border-[#333]">
+                            <div class="bg-green-500 h-full" style="width: ${lowPct}%" title="Low: ${lowPct.toFixed(1)}%"></div>
+                            <div class="bg-yellow-500 h-full" style="width: ${medPct}%" title="Medium: ${medPct.toFixed(1)}%"></div>
+                            <div class="bg-orange-500 h-full" style="width: ${highPct}%" title="High: ${highPct.toFixed(1)}%"></div>
+                            <div class="bg-red-600 h-full" style="width: ${critPct}%" title="Critical: ${critPct.toFixed(1)}%"></div>
+                        </div>
+                        <div class="flex justify-between text-xs text-gray-500 font-bold">
+                            <span>Low (${data.severity_distribution.Low || 0})</span>
+                            <span>Critical (${data.severity_distribution.Critical || 0})</span>
+                        </div>
+                    </div>
+                `;
+
+                // 1. Protocol Doughnut Chart
+                const ctx = document.getElementById('protoChart').getContext('2d');
+                if (chartInstance) chartInstance.destroy();
+                
+                const labels = Object.keys(data.protocol_distribution);
+                const values = Object.values(data.protocol_distribution);
+                
+                chartInstance = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            data: values,
+                            backgroundColor: ['#2196f3', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#00bcd4'],
+                            borderWidth: 2,
+                            borderColor: '#1e1e1e'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { position: 'bottom', labels: { color: '#e0e0e0' } }
+                        }
+                    }
+                });
+
+                // 2. Connection Frequency Line Chart
+                const ctxFreq = document.getElementById('freqChart').getContext('2d');
+                if (freqChartInstance) freqChartInstance.destroy();
+
+                const timeMap = {};
+                currentPackets.forEach(p => {
+                    const timeWindow = p.time_relative.substring(0, 5); 
+                    timeMap[timeWindow] = (timeMap[timeWindow] || 0) + 1;
+                });
+                
+                const timeLabels = Object.keys(timeMap).sort();
+                const timeValues = timeLabels.map(t => timeMap[t]);
+
+                freqChartInstance = new Chart(ctxFreq, {
+                    type: 'line',
+                    data: {
+                        labels: timeLabels,
+                        datasets: [{
+                            label: 'Packets Received',
+                            data: timeValues,
+                            borderColor: '#2196f3',
+                            backgroundColor: 'rgba(33, 150, 243, 0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.3,
+                            pointBackgroundColor: '#fff',
+                            pointRadius: 3
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: { beginAtZero: true, grid: { color: '#333' }, ticks: { precision: 0, color: '#aaa' } },
+                            x: { grid: { display: false }, ticks: { color: '#aaa' } }
+                        },
+                        plugins: {
+                            legend: { display: false }
+                        }
+                    }
+                });
+
+            } catch (err) {
+                console.error("Dashboard error", err);
+                document.getElementById('dash-metrics').innerHTML = `<p class="text-red-500 text-center font-bold">Failed to load statistics.</p>`;
+            }
+        }
+
+        function closeDashboard() {
+            document.getElementById('dashboard-modal').classList.add('hidden');
+        }
+    </script>
+</body>
+</html>
